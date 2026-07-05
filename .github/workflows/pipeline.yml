@@ -1,0 +1,84 @@
+name: Fast-API CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  dockerhub_id: zakiaelmanssouri
+  dockerhub_repository: fastapi
+  dockerhub_latest: latest
+  container: webinar
+
+permissions:
+  security-events: write
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Test python Code
+        run: |
+          pip3 install -r requirements.txt
+          cd app
+          pytest
+
+  build-push-container:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Build Docker image
+        run: |
+          docker build -t $dockerhub_id/$dockerhub_repository:${GITHUB_SHA} .
+          docker tag $dockerhub_id/$dockerhub_repository:${GITHUB_SHA} $dockerhub_id/$dockerhub_repository:$dockerhub_latest
+          docker images
+
+      - name: Test Docker image
+        run: |
+          docker run -d -p 80:80 --name $container $dockerhub_id/$dockerhub_repository:${GITHUB_SHA}
+          sleep 10
+          curl http://localhost
+
+      - name: Login DockerHub
+        run: |
+          docker login -u ${{ secrets.REGISTRY_USER }} -p ${{ secrets.REGISTRY_PASSWD }}
+
+      - name: Push Docker image
+        run: |
+          docker push $dockerhub_id/$dockerhub_repository:${GITHUB_SHA}
+          docker push $dockerhub_id/$dockerhub_repository:$dockerhub_latest
+
+  update-push:
+    needs: build-push-container
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Clone manifest repository
+        run: |
+          git clone https://${{ secrets.GIT_PAT }}@github.com/Zakia-1802/datascientest-argo-manifest.git
+
+      - name: Update image tag
+        run: |
+          cd datascientest-argo-manifest
+          sed -i "s+tag:.*+tag: ${GITHUB_SHA}+g" values.yaml
+          cat values.yaml
+
+      - name: Commit and push
+        run: |
+          cd datascientest-argo-manifest
+          git config --global user.name "Zakia-1802"
+          git config --global user.email "zakiaelmanssouri18@gmail.com"
+          git add -A
+          git commit -m "Mise à jour de l'image avec le tag ${GITHUB_SHA}" || echo "Aucun changement à valider"
+          git push origin main
